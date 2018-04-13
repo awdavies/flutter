@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
+import 'package:stream_channel/stream_channel.dart';
 import 'package:web_socket_channel/io.dart';
 
 import '../common/logging.dart';
@@ -20,7 +21,7 @@ final Logger _log = new Logger('DartVm');
 
 /// Signature of an asynchronous function for astablishing a JSON RPC-2
 /// connection to a [Uri].
-typedef Future<json_rpc.Peer> RpcPeerConnectionFunction(Uri uri);
+typedef Future<StreamChannel<String>> RpcStreamConnectionFunction(Uri uri);
 
 /// [DartVm] uses this function to connect to the Dart VM on Fuchsia.
 ///
@@ -31,18 +32,15 @@ RpcPeerConnectionFunction fuchsiaVmServiceConnectionFunction = _waitAndConnect;
 /// Attempts to connect to a Dart VM service.
 ///
 /// Gives up after `_kConnectTimeout` has elapsed.
-Future<json_rpc.Peer> _waitAndConnect(Uri uri) async {
+Future<StreamChannel<String>> _waitAndConnect(Uri uri) async {
   final Stopwatch timer = new Stopwatch()..start();
 
-  Future<json_rpc.Peer> attemptConnection(Uri uri) async {
+  Future<StreamChannel<String>> attemptConnection(Uri uri) async {
     WebSocket socket;
-    json_rpc.Peer peer;
     try {
       socket = await WebSocket.connect(uri.toString());
-      peer = new json_rpc.Peer(new IOWebSocketChannel(socket).cast())..listen();
-      return peer;
+      return new IOWebSocketChannel(socket).cast();
     } catch (e) {
-      await peer?.close();
       await socket?.close();
       if (timer.elapsed < _kConnectTimeout) {
         _log.info('Attempting to reconnect');
@@ -62,6 +60,19 @@ Future<json_rpc.Peer> _waitAndConnect(Uri uri) async {
 /// Restores the VM service connection function to the default implementation.
 void restoreVmServiceConnectionFunction() {
   fuchsiaVmServiceConnectionFunction = _waitAndConnect;
+}
+
+class DartVmError extends Error {
+  /// Basic constructor outlining the reason for the VM error.
+  DartVmError(this.message);
+
+  /// The reason for the error.
+  final String message;
+
+  @override
+  String toString() {
+    return '$DartVmError: $message\n${super.stackTrace}';
+  }
 }
 
 /// An error raised when a malformed RPC response is received from the Dart VM.
@@ -86,7 +97,19 @@ class RpcFormatError extends Error {
 /// Either wraps existing RPC calls to the Dart VM service, or runs raw RPC
 /// function calls via [invokeRpc].
 class DartVm {
-  DartVm._(this._peer);
+  DartVm._(this._webSocketChannel, this.uri)
+      : _peer = new json_rpc.Peer(_webSocketChannel)..listen();
+
+  final Uri uri;
+
+  // TODO: Kill this and move it back to just the peer again...
+  final StreamChannel<String> _webSocketChannel;
+
+  /// Returns the shared channel that this VM instance uses.
+  ///
+  /// This can be used to share multiple connections to an already established
+  /// instance of the Dart VM service.
+  StreamChannel<String> get sharedWebSocket => _webSocketChannel;
 
   final json_rpc.Peer _peer;
 
@@ -97,11 +120,12 @@ class DartVm {
     if (uri.scheme == 'http') {
       uri = uri.replace(scheme: 'ws', path: '/ws');
     }
-    final json_rpc.Peer peer = await fuchsiaVmServiceConnectionFunction(uri);
-    if (peer == null) {
+    final StreamChannel<String> webSocketChannel =
+        await fuchsiaVmServiceConnectionFunction(uri);
+    if (webSocketChannel == null) {
       return null;
     }
-    return new DartVm._(peer);
+    return new DartVm._(webSocketChannel, uri);
   }
 
   /// Invokes a raw JSON RPC command with the VM service.
@@ -149,12 +173,61 @@ class DartVm {
     return views;
   }
 
+  Future<List<IsolateRef>> getIsolatesByPattern(Pattern pattern) async {
+    final Map<String, dynamic> jsonVmRef =
+        await invokeRpc('getVM', timeout: _kRpcTimeout);
+    final List<Map<String, dynamic>> jsonIsolates = jsonVmRef['isolates'];
+    final List<IsolateRef> result = <IsolateRef>[];
+    for (Map<String, dynamic> jsonIsolate in jsonIsolates) {
+      final String name = jsonIsolate['name'];
+      if (name.contains(pattern) && name.contains(new RegExp(r':main\(\)'))) {
+        result.add(new IsolateRef._fromJson(jsonIsolate, this));
+      }
+    }
+    return result;
+  }
+
   /// Disconnects from the Dart VM Service.
   ///
   /// After this function completes this object is no longer usable.
   Future<Null> stop() async {
     await _peer?.close();
   }
+}
+
+// TODO:document me!
+//
+// This is a simple wrapper class that is surfaced when a main Isolate for a
+// FlutterView is found. This can then be used to connect via the flutter driver
+// for driving events or whatever.
+class IsolateRef {
+  IsolateRef._(this.name, this.id, this.dartVm);
+
+  factory IsolateRef._fromJson(Map<String, dynamic> json, DartVm dartVm) {
+    final String id = json['id'];
+    final String name = json['name'];
+    final String type = json['type'];
+    if (type == null) {
+      throw new RpcFormatError('Unable to find type within JSON "$json"');
+    }
+    if (type != '@Isolate') {
+      throw new RpcFormatError('Type "$type" does not match for IsolateRef');
+    }
+    if (id == null) {
+      throw new RpcFormatError(
+          'Unable to find ID for isolate ref within JSON "$json"');
+    }
+    if (name == null) {
+      throw new RpcFormatError(
+          'Unable to find name for isolate ref within JSON "$json"');
+    }
+    return new IsolateRef._(
+        name, int.parse(id.replaceFirst('isolates/', '')), dartVm);
+  }
+
+  final String name;
+  final int id;
+  final DartVm dartVm;
 }
 
 /// Represents an instance of a Flutter view running on a Fuchsia device.

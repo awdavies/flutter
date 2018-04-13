@@ -51,14 +51,6 @@ void restoreFuchsiaPortForwardingFunction() {
 /// Note that this class can be connected to several instances of the Fuchsia
 /// device's Dart VM at any given time.
 class FuchsiaRemoteConnection {
-  final List<PortForwarder> _forwardedVmServicePorts = <PortForwarder>[];
-  final SshCommandRunner _sshCommandRunner;
-  final bool _useIpV6Loopback;
-
-  /// VM service cache to avoid repeating handshakes across function
-  /// calls. Keys a forwarded port to a DartVm connection instance.
-  final Map<int, DartVm> _dartVmCache = <int, DartVm>{};
-
   FuchsiaRemoteConnection._(this._useIpV6Loopback, this._sshCommandRunner);
 
   /// Same as [FuchsiaRemoteConnection.connect] albeit with a provided
@@ -107,6 +99,14 @@ class FuchsiaRemoteConnection {
     );
   }
 
+  final List<PortForwarder> _forwardedVmServicePorts = <PortForwarder>[];
+  final SshCommandRunner _sshCommandRunner;
+  final bool _useIpV6Loopback;
+
+  /// VM service cache to avoid repeating handshakes across function
+  /// calls. Keys a forwarded port to a DartVm connection instance.
+  final Map<int, DartVm> _dartVmCache = <int, DartVm>{};
+
   /// Closes all open connections.
   ///
   /// Any objects that this class returns (including any child objects from
@@ -139,6 +139,38 @@ class FuchsiaRemoteConnection {
       views.addAll(await vmService.getAllFlutterViews());
     }
     return new List<FlutterView>.unmodifiable(views);
+  }
+
+  /// TODO: Document me!
+  ///
+  /// Returns a main isolate whose name matches the pattern supplied.
+  /// This Isolate can pop up in any VM.
+  ///
+  /// Note that in its current state this is not capable of listening for an
+  /// application to start up.
+  ///
+  /// In most cases when a mod starts up it runs inside its own instance of the
+  /// Dart VM.
+  Future<List<IsolateRef>> getMainIsolatesByPattern(Pattern pattern) async {
+    if (_forwardedVmServicePorts.isEmpty) {
+      return null;
+    }
+    List<Future<List<IsolateRef>>> isolates = <Future<List<IsolateRef>>>[];
+    for (PortForwarder fp in _forwardedVmServicePorts) {
+      final DartVm vmService = await _getDartVm(fp.port);
+      isolates.add(vmService.getIsolatesByPattern(pattern));
+    }
+    return Future.wait(isolates).then((listOfLists) {
+      List<List<IsolateRef>> mutableListOfLists = new List.from(listOfLists)
+        ..retainWhere((list) => !list.isEmpty);
+      return mutableListOfLists.fold<List<IsolateRef>>(
+        <IsolateRef>[],
+        (prevValue, element) {
+          prevValue.addAll(element);
+          return prevValue;
+        },
+      );
+    });
   }
 
   Future<DartVm> _getDartVm(int port) async {
