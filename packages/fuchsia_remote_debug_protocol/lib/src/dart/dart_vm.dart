@@ -35,12 +35,12 @@ RpcPeerConnectionFunction fuchsiaVmServiceConnectionFunction = _waitAndConnect;
 Future<json_rpc.Peer> _waitAndConnect(Uri uri) async {
   final Stopwatch timer = new Stopwatch()..start();
 
-  Future<StreamChannel<String>> attemptConnection(Uri uri) async {
+  Future<json_rpc.Peer> attemptConnection(Uri uri) async {
     WebSocket socket;
     json_rpc.Peer peer;
     try {
       socket = await WebSocket.connect(uri.toString());
-      peer = new json_rpc.Peer(IOWebSocketChannel(socket).cast())..listen();
+      peer = new json_rpc.Peer(new IOWebSocketChannel(socket).cast())..listen();
       return peer;
     } catch (e) {
       await peer?.close();
