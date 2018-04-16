@@ -144,19 +144,23 @@ class FlutterDriver {
 
   static int _nextDriverId = 0;
 
-  /// TODO(awdavies) Extend this name.
+  /// Connects to an Isolate of the specific ID.
   ///
-  /// Connects to an application named after the specific pattern.  Assumes the
-  /// thing is already there at least in IsolateRef form.
+  /// Assumes:
+  /// -- The Isolate is already running (will not wait for it to start).
+  /// -- The Isolate specified by the [isolateId] exists on the Dart VM.
+  /// -- [dartVmServiceUrl] points to a valid instance of the DartVM.
+  ///
+  /// Remaining params are identical to [FlutterDriver.connect].
   static Future<FlutterDriver> connectToIsolate(
-    String uri, {
+    String dartVmServiceUrl, {
     int isolateId,
     bool printCommunication: false,
     bool logCommunicationToFile: true,
   }) async {
     _log.info('Connecting to Isolate $isolateId.');
     final VMServiceClientConnection connection =
-        await vmServiceConnectFunction(uri);
+        await vmServiceConnectFunction(dartVmServiceUrl);
     final VMServiceClient client = connection.client;
     final VM vm = await client.getVM();
     _log.trace('Looking for the isolate');
@@ -215,6 +219,7 @@ class FlutterDriver {
     );
   }
 
+  /// Helper function that finishes instantiating a [FlutterDriver].
   static Future<FlutterDriver> _connectToIsolate({
     VMIsolateRef isolateRef,
     VM vm,

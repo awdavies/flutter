@@ -141,16 +141,10 @@ class FuchsiaRemoteConnection {
     return new List<FlutterView>.unmodifiable(views);
   }
 
-  /// TODO: Document me!
+  /// Returns all Isolates running `main()` as matched by the [Pattern].
   ///
-  /// Returns a main isolate whose name matches the pattern supplied.
-  /// This Isolate can pop up in any VM.
-  ///
-  /// Note that in its current state this is not capable of listening for an
-  /// application to start up.
-  ///
-  /// In most cases when a mod starts up it runs inside its own instance of the
-  /// Dart VM.
+  /// In the current state this is not capable of listening for an
+  /// Isolate to start up. The Isolate must already be running.
   Future<List<IsolateRef>> getMainIsolatesByPattern(Pattern pattern) async {
     if (_forwardedVmServicePorts.isEmpty) {
       return null;
@@ -163,6 +157,7 @@ class FuchsiaRemoteConnection {
     return Future.wait(isolates).then((listOfLists) {
       List<List<IsolateRef>> mutableListOfLists = new List.from(listOfLists)
         ..retainWhere((list) => !list.isEmpty);
+      // Folds the list of lists into one flat list.
       return mutableListOfLists.fold<List<IsolateRef>>(
         <IsolateRef>[],
         (prevValue, element) {

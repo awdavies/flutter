@@ -11,13 +11,16 @@ import 'package:fuchsia_remote_debug_protocol/logging.dart';
 
 /// Runs through a simple usage of the fuchsia_remote_debug_protocol library:
 /// connects to a remote machine at the address in argument 1 (interface
-/// optional for argument 2) to list all active flutter views and Dart VMs
-/// running on said device. This uses an SSH config file (optional, depending
-/// on your setup).
+/// optional for argument 2) to drive an application named 'todo_list' by
+/// scrolling up and down on the main scaffold.
+///
+/// Make sure to set up your application (you can change the name from
+/// 'todo_list') follows the setup for testing with the flutter driver:
+/// https://flutter.io/testing/#adding-the-flutter_driver-dependency
 ///
 /// Example usage:
 ///
-/// $ dart examples/list_vms_and_flutter_views.dart \
+/// $ dart examples/driver_todo_list_scroll.dart \
 ///     fe80::8eae:4cff:fef4:9247 eno1
 Future<Null> main(List<String> args) async {
   // Log only at info level within the library. If issues arise, this can be
@@ -35,11 +38,6 @@ Future<Null> main(List<String> args) async {
   const String sshConfigPath = '../../out/release-x86-64/ssh-keys/ssh_config';
   final FuchsiaRemoteConnection connection =
       await FuchsiaRemoteConnection.connect(address, interface, sshConfigPath);
-  print('On $address, the following Dart VM ports are running:');
-  for (int port in await connection.getDeviceServicePorts()) {
-    print('\t$port');
-  }
-  print('');
 
   List<IsolateRef> refs =
       await connection.getMainIsolatesByPattern('todo_list');
@@ -52,11 +50,11 @@ Future<Null> main(List<String> args) async {
       printCommunication: true,
       logCommunicationToFile: false);
   for (int i = 0; i < 20; ++i) {
-    // Scroll down VVVVVV
+    // Scrolls down 300px.
     await driver.scroll(
         find.byType('Scaffold'), 0.0, -300.0, new Duration(milliseconds: 300));
     await new Future<Null>.delayed(new Duration(milliseconds: 500));
-    // Scroll up ^^^^^
+    // Scrolls up 300px.
     await driver.scroll(
         find.byType('Scaffold'), 300.0, 300.0, new Duration(milliseconds: 300));
   }

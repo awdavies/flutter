@@ -21,7 +21,7 @@ final Logger _log = new Logger('DartVm');
 
 /// Signature of an asynchronous function for astablishing a JSON RPC-2
 /// connection to a [Uri].
-typedef Future<StreamChannel<String>> RpcStreamConnectionFunction(Uri uri);
+typedef Future<json_rpc.Peer> RpcStreamConnectionFunction(Uri uri);
 
 /// [DartVm] uses this function to connect to the Dart VM on Fuchsia.
 ///
@@ -32,15 +32,18 @@ RpcPeerConnectionFunction fuchsiaVmServiceConnectionFunction = _waitAndConnect;
 /// Attempts to connect to a Dart VM service.
 ///
 /// Gives up after `_kConnectTimeout` has elapsed.
-Future<StreamChannel<String>> _waitAndConnect(Uri uri) async {
+Future<json_rpc.Peer> _waitAndConnect(Uri uri) async {
   final Stopwatch timer = new Stopwatch()..start();
 
   Future<StreamChannel<String>> attemptConnection(Uri uri) async {
     WebSocket socket;
+    json_rpc.Peer peer;
     try {
       socket = await WebSocket.connect(uri.toString());
-      return new IOWebSocketChannel(socket).cast();
+      peer = new json_rpc.Peer(IOWebSocketChannel(socket).cast())..listen();
+      return peer;
     } catch (e) {
+      await peer?.close();
       await socket?.close();
       if (timer.elapsed < _kConnectTimeout) {
         _log.info('Attempting to reconnect');
@@ -97,19 +100,10 @@ class RpcFormatError extends Error {
 /// Either wraps existing RPC calls to the Dart VM service, or runs raw RPC
 /// function calls via [invokeRpc].
 class DartVm {
-  DartVm._(this._webSocketChannel, this.uri)
-      : _peer = new json_rpc.Peer(_webSocketChannel)..listen();
+  DartVm._(this._peer, this.uri);
 
+  // The URI through which this DartVM instance is connected.
   final Uri uri;
-
-  // TODO: Kill this and move it back to just the peer again...
-  final StreamChannel<String> _webSocketChannel;
-
-  /// Returns the shared channel that this VM instance uses.
-  ///
-  /// This can be used to share multiple connections to an already established
-  /// instance of the Dart VM service.
-  StreamChannel<String> get sharedWebSocket => _webSocketChannel;
 
   final json_rpc.Peer _peer;
 
@@ -120,12 +114,11 @@ class DartVm {
     if (uri.scheme == 'http') {
       uri = uri.replace(scheme: 'ws', path: '/ws');
     }
-    final StreamChannel<String> webSocketChannel =
-        await fuchsiaVmServiceConnectionFunction(uri);
-    if (webSocketChannel == null) {
+    final json_rpc.Peer peer = await fuchsiaVmServiceConnectionFunction(uri);
+    if (peer == null) {
       return null;
     }
-    return new DartVm._(webSocketChannel, uri);
+    return new DartVm._(peer, uri);
   }
 
   /// Invokes a raw JSON RPC command with the VM service.
@@ -195,11 +188,13 @@ class DartVm {
   }
 }
 
-// TODO:document me!
+// This is a wrapper class for the `@Isolate` RPC object.
 //
-// This is a simple wrapper class that is surfaced when a main Isolate for a
-// FlutterView is found. This can then be used to connect via the flutter driver
-// for driving events or whatever.
+// See:
+// https://github.com/dart-lang/sdk/blob/master/runtime/vm/service/service.md#isolate
+//
+// This class contains information about the Isolate like its name and ID, as
+// well as a reference to the parent DartVM on which it is running.
 class IsolateRef {
   IsolateRef._(this.name, this.id, this.dartVm);
 
@@ -225,8 +220,11 @@ class IsolateRef {
         name, int.parse(id.replaceFirst('isolates/', '')), dartVm);
   }
 
+  // The full name of this Isolate (not guaranteed to be unique).
   final String name;
+  // The unique ID of this isolate.
   final int id;
+  // The parent DartVM on which this Isolate lives.
   final DartVm dartVm;
 }
 
